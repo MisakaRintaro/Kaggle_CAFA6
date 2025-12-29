@@ -318,4 +318,117 @@ stepごとに.pyファイルを作成し、関数やクラスを管理する
 
 ---
 
-### 
+### 後処理の追加
+
+GOは階層的な構造を持つ。
+よって、モデルの予測でとあるGO, GO_aである確率が1に近い時、その上位概念(is_a)の確率も1に近いのが自然である。
+逆もまた然りで、GO_aの確率が0に近い時、その下位概念も0に近いのが自然である。
+この補正の実装には、以下の2つの設計のどちらかを選択する必要がある。
+1. とある下位GOの確率が高い時,その上位GOの確率を引き上げる
+2. とある上位GOの確率が低い時,その下位GOの確率を引き下げる
+
+---
+
+### JointModelの改善
+
+JointModelは二つのEmbeddingを単純な線型結合層一つで変換するかなり単純なモデルである。
+もう少し複雑なモデルにすることで精度改善が期待できる。
+具体的にはTransformerのAttention機構を一層でいいので追加できると良いと考えている。
+何故なら、本タスクの目的は本質的にアミノ酸配列とそれに対応する辞書を作成することに近似でき、それはAttention機構のkey, valueに対応すると考えられるからである。
+
+---
+
+### 推論時間短縮
+
+特にesm2による推論部分に大きな時間がかかっている。
+この部分の推論時間短縮に成功すれば、その分のリソースを他に回せる
+
+--- 
+
+### 使っていないinputの使用
+
+現在はinputの中でも使っていない情報が多数ある。
+これらを使用することで最終的なoutputの精度向上が期待できる。
+使用方法は必ずしも機械学習や深層学習的手法に限らず、前処理や後述する後処理への使用も検討される。
+ただし、test時に使えない情報の扱いには注意が必要である。
+
+#### 1. `IA.tsv` (Information Accretion weights)
+- **内容**: 各GO termに対する重要度スコア(Information Accretion)
+- **用途**:
+  - 評価指標として使用される(コンペのメトリクスに関連)
+  - 予測時の閾値調整: IA値が高いGO termは予測を慎重に行う
+  - 損失関数の重み付け: IA値に応じて損失に重みを付ける
+  - スコアキャリブレーション: 重要なGO termの予測確率を調整
+- **注意**: trainとtestの両方で使用可能
+
+#### 2. `testsuperset-taxon-list.tsv` (テストデータの生物種情報)
+- **内容**: テストセットの各タンパク質の生物種(taxonomy ID)
+- **用途**:
+  - 生物種別のモデル選択やアンサンブル
+  - 生物種固有のGO term傾向を活用した後処理
+  - 生物種情報を条件付け変数として使用(conditional prediction)
+- **注意**: test時に使用可能なので積極的に活用すべき
+
+#### 3. `train_taxonomy.tsv` (訓練データの生物種情報)
+- **内容**: 訓練セットの各タンパク質の生物種(taxonomy ID)
+- **用途**:
+  - 生物種情報をタンパク質embeddingに追加(concatenateまたはcross-attention)
+  - 生物種ごとのGO term分布の学習
+  - データ拡張: 生物種情報をマスクしたり摂動させる
+  - 層別サンプリング: 生物種のバランスを考慮した学習
+- **注意**: trainのみで使用可能。testでは`testsuperset-taxon-list.tsv`を使用
+
+#### 4. `train_terms.tsv`のaspect列
+- **内容**: 各GO termの種類(biological_process / molecular_function / cellular_component)
+- **用途**:
+  - aspect別のモデル構築: 3つの異なるモデルを訓練
+  - aspect別の損失計算: 各aspectで異なる重みや閾値を使用
+  - 予測の制約: 生物学的に矛盾するaspectの組み合わせを排除
+  - アンサンブル: aspect別予測を統合
+- **注意**: `go-basic.obo`のnamespace情報と対応している
+
+#### 5. FASTA形式のアミノ酸配列以外の情報
+- **内容**: FASTAヘッダーに含まれるメタデータ(配列ID、アノテーション等)
+- **用途**:
+  - 配列IDを使用してtaxonomy情報やGO term情報と結合
+  - ヘッダー内の追加情報(もしあれば)の活用
+- **注意**: 現在は配列のみを使用しているが、ヘッダー情報の解析も検討
+
+#### 6. `go-basic.obo`のidとname以外の情報
+- **内容**: GO ontologyの詳細構造
+  - `is_a`: 親子関係(階層構造)
+  - `def`: GO termの定義文
+  - `namespace`: biological_process / molecular_function / cellular_component
+  - `relationship`: その他の関係性(part_of, regulates等)
+  - `alt_id`: 代替ID
+  - `is_obsolete`: 廃止されたGO term
+- **用途**:
+  - **is_a関係**:
+    - 階層的な後処理(前述の「後処理の追加」セクション参照)
+    - Graph Neural Network (GNN)による埋め込み学習
+    - 予測の伝播: 子ノードの予測から親ノードの予測を補正
+  - **def(定義文)**:
+    - ✅ 現在使用中: GO termのnameとdefを結合してテキストembeddingを生成
+    - 改善の余地: defの前処理方法の最適化(引用符除去以外の手法も検討)
+  - **namespace**:
+    - aspect別モデルの構築に使用
+  - **relationship**:
+    - より複雑なグラフ構造の学習
+    - 異なる関係性に基づく制約の追加
+  - **is_obsolete**:
+    - 廃止されたGO termを予測候補から除外
+
+#### 実装の優先順位(推奨)
+1. **高優先度**(未実装):
+   - `is_a`関係: 階層的後処理
+   - `namespace`/`aspect`: aspect別モデリング
+2. **中優先度**(未実装):
+   - `IA.tsv`: 損失関数の重み付けやスコアキャリブレーション
+   - `testsuperset-taxon-list.tsv`: 生物種条件付き予測
+   - `train_taxonomy.tsv`: 生物種情報のembedding統合
+3. **低優先度**(未実装):
+   - その他の`relationship`: より複雑なグラフ構造
+   - FASTAヘッダーの詳細解析
+
+---
+
