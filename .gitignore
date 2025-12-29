@@ -1,0 +1,62 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb_checkpoints
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# MacOS
+.DS_Store
+
+# Model files (large pretrained models)
+model/
+*.safetensors
+*.bin
+*.h5
+*.msgpack
+*.onnx
+*.pt
+*.pth
+
+# Output files
+output/
+*.pkl
+*.pickle
+
+# Data files (if large)
+input/
+data/
+
+# Environment
+.env
+.envrc
