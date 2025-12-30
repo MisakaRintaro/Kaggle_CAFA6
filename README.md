@@ -112,19 +112,40 @@ Kaggle_CAFA6/
 │       │   ├── train_terms.tsv
 │       │   ├── train_taxonomy.tsv
 │       │   └── go-basic.obo
-│       ├── Test/                   # Test data
+│       ├── Test (Targets)/         # Test data
 │       │   ├── testsuperset.fasta
 │       │   └── testsuperset-taxon-list.tsv
-│       ├── IA.tsv                  # GO term weights
+│       ├── IA.tsv                  # GO term Information Accretion weights
 │       └── sample_submission.tsv
-├── src/                            # Source code (reusable logic)
-│   └── main.ipynb                  # Main notebook for Kaggle submission
-├── model/                          # Pre-trained model weights
-│   ├── esm2_t12_35M_UR50D/        # ESM2 protein embedding model
-│   ├── esm2_t30_150M_UR50D/
-│   ├── esm2_t33_650M_UR50D/
-│   └── BiomedNLP-BiomedBERT-base-uncased-abstract/  # BiomedBERT for GO text
-├── output/                         # Generated embeddings and predictions
+├── src/                            # Source code (modularized)
+│   ├── main.py                     # Main pipeline script
+│   ├── config.py                   # Configuration and paths
+│   ├── data_loader.py              # Data loading utilities
+│   ├── protein_embedding.py        # ESM-2 protein embedding
+│   ├── go_embedding.py             # BiomedBERT GO term embedding
+│   ├── model.py                    # JointModel architecture
+│   ├── training.py                 # Training loop and checkpointing
+│   ├── prediction.py               # Inference and submission
+│   ├── hierarchical_postprocess.py # Hierarchical GO postprocessing
+│   ├── evaluation.py               # Evaluation metrics (IA-weighted Fmax)
+│   └── main.ipynb                  # Legacy notebook (archived)
+├── docs/                           # Documentation
+│   ├── data_loading.md             # Data loading details
+│   ├── embeddings.md               # Embedding generation
+│   ├── model_architecture.md       # JointModel structure
+│   ├── hierarchical_postprocessing.md  # Postprocessing details
+│   └── evaluation.md               # Evaluation metrics (CAFA-6)
+├── model/                          # Pre-trained model weights (gitignored)
+│   ├── esm2_t12_35M_UR50D/        # ESM-2 protein embedding model
+│   └── BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext/
+├── output/                         # Generated files
+│   ├── embeddings/                 # Cached embeddings
+│   │   ├── train_protein_embeddings.pt
+│   │   ├── test_protein_embeddings.pt
+│   │   └── go_embeddings.pt
+│   ├── models/                     # Trained models
+│   │   └── joint_model.pt
+│   └── submission.tsv              # Final submission file
 ├── pyproject.toml                  # Project dependencies (uv)
 └── README.md
 ```
@@ -226,6 +247,144 @@ This design is particularly suitable for:
 
 ---
 
+## 🚀 Implementation Status & Pipeline
+
+### Current Pipeline (7 Steps, 3 Phases)
+
+The implementation is fully modularized into `src/*.py` files. The main pipeline in [src/main.py](src/main.py) is organized into **3 distinct phases** with **7 steps total**:
+
+---
+
+#### **Phase 1: Data Preparation (Steps 1-4)**
+
+**Step 1: Load GO Ontology and Training Labels**
+- Parse GO ontology from `go-basic.obo` to extract hierarchy (`child_to_parents`, `go_terms`)
+- Load training labels from `train_terms.tsv`
+- Load Information Accretion (IA) weights
+- Implementation: [data_loader.py](src/data_loader.py)
+
+**Step 2: Create GO Embeddings**
+- Encode GO term names and definitions using BiomedBERT
+- Model: `microsoft/BiomedNLP-BiomedBERT-base-uncased-abstract-fulltext`
+- Implementation: [go_embedding.py](src/go_embedding.py)
+- Output: 768-dimensional vectors
+- Cached to disk for reuse
+
+**Step 3: Load and Embed Training Protein Sequences**
+- Encode protein sequences using ESM-2 (`facebook/esm2_t12_35M_UR50D`)
+- Implementation: [protein_embedding.py](src/protein_embedding.py)
+- Output: 480-dimensional vectors per protein
+- Cached to disk for reuse (`.pt` files in `output/embeddings/`)
+
+**Step 4: Create Training and Validation Datasets**
+- Stratified split by label count (default: 80/20 split)
+- Implementation: [evaluation.py](src/evaluation.py) → `split_train_validation()`
+- Ensures balanced distribution of protein annotation complexity
+- Creates PyTorch DataLoaders for training and validation
+
+---
+
+#### **Phase 2: Training and Evaluation (Step 5)**
+
+**Step 5: Model Training and Validation**
+- **Architecture**: JointModel (Dual-Encoder)
+  - Protein encoder: Linear(480 → 256)
+  - GO encoder: Linear(768 → 256)
+  - Scoring: Dot product in joint space
+- **Loss**: BCEWithLogitsLoss (multi-label classification)
+- **Optimizer**: Adam (lr=1e-3, default 10 epochs)
+- **Validation Evaluation**:
+  - Evaluates on held-out validation set
+  - **Compares before/after hierarchical postprocessing**:
+    - Baseline metrics (without postprocessing)
+    - Post-processed metrics (with hierarchical corrections)
+    - Shows improvement delta (Δ)
+  - Metrics: Precision, Recall, F1, Average Precision, **IA-weighted Fmax** (official CAFA-6 metric)
+  - Saves comparison results to JSON file
+- Implementation: [model.py](src/model.py), [training.py](src/training.py), [evaluation.py](src/evaluation.py)
+
+---
+
+#### **Phase 3: Inference and Submission (Steps 6-7)**
+
+**Step 6: Test Inference**
+- Load and encode test protein sequences using ESM-2
+- Generate predictions for all test proteins
+- Compute scores for all GO terms
+- Select top-K predictions per protein (default: K=100)
+- Implementation: [protein_embedding.py](src/protein_embedding.py), [prediction.py](src/prediction.py)
+
+**Step 7: Postprocessing and Submission**
+- **Hierarchical Postprocessing** (always enabled):
+  - Enforces GO hierarchy constraints using hybrid approach:
+    1. **Bottom-up propagation**: If child has high score, increase parent score (α=0.3)
+    2. **Top-down suppression**: If parent has low score, decrease child score (threshold=0.3, β=0.5)
+  - Parameters are fixed in [hierarchical_postprocess.py](src/hierarchical_postprocess.py)
+  - Implementation: [hierarchical_postprocess.py](src/hierarchical_postprocess.py)
+- **Submission File Creation**:
+  - Generate `submission.tsv` in Kaggle submission format
+  - Format: `protein_id\tGO:term\tscore` (one per line)
+
+### Development Mode (DEV_TEST)
+
+For faster iteration during development, set `DEV_TEST = True` in [config.py](src/config.py):
+
+```python
+# config.py
+DEV_TEST = True  # Enables development mode
+DEV_TEST_MAX_BATCHES = 100  # Process only first 100 batches
+```
+
+**Effects:**
+- Limits ESM-2 encoding to first 100 batches (faster testing)
+- Uses separate output files with `_dev` suffix to avoid overwriting production outputs
+- Ideal for rapid prototyping and debugging
+
+**Usage:**
+```bash
+# Development mode - quick testing
+python src/main.py  # with DEV_TEST=True in config.py
+
+# Production mode - full dataset
+python src/main.py  # with DEV_TEST=False in config.py
+```
+
+### Configuration
+
+All parameters are centralized in [src/config.py](src/config.py):
+
+```python
+# Model parameters
+JOINT_DIM = 256
+TRAIN_BATCH_SIZE = 16
+NUM_EPOCHS = 10
+LEARNING_RATE = 1e-3
+
+# Evaluation
+ENABLE_VALIDATION = True
+VAL_SPLIT_RATIO = 0.2
+VAL_STRATIFY_BY_LABEL_COUNT = True
+```
+
+**Hierarchical Postprocessing Parameters:**
+
+Fixed parameters are defined in [src/hierarchical_postprocess.py](src/hierarchical_postprocess.py) and always enabled:
+- `ALPHA = 0.3` (Bottom-up propagation coefficient)
+- `THRESHOLD = 0.3` (Top-down suppression threshold)
+- `BETA = 0.5` (Top-down suppression relaxation coefficient)
+
+### Documentation
+
+Detailed documentation for each component is available in the `docs/` directory:
+
+- [Data Loading](docs/data_loading.md): FASTA parsing, GO OBO parsing, label loading
+- [Embeddings](docs/embeddings.md): ESM-2 protein encoding, BiomedBERT GO encoding
+- [Model Architecture](docs/model_architecture.md): JointModel structure, training, inference
+- [Hierarchical Postprocessing](docs/hierarchical_postprocessing.md): Bottom-up/Top-down algorithms, parameters
+- [Evaluation](docs/evaluation.md): IA-weighted Fmax, validation metrics (CAFA-6 official)
+
+---
+
 ## 🛠️ セットアップ手順
 
 ### 1. 環境構築
@@ -309,53 +468,53 @@ cd ../..
 
 **注意**: `model/`ディレクトリ全体は`.gitignore`で除外されています。モデルファイルはGitにコミットされません。
 
-## To Do
+---
 
-### フォルダ整理
+## 📋 To Do
 
-main.ipynbに機能が集中しすぎている
-stepごとに.pyファイルを作成し、関数やクラスを管理する
+### ✅ 完了済みタスク
+
+以下のコア機能は実装完了しています。詳細は各ドキュメントを参照してください。
+
+1. **モジュール化** - 9つの独立モジュールに機能分割完了
+2. **7ステップパイプライン** - 3フェーズ構造（データ準備→訓練/評価→推論/提出）
+3. **階層的後処理** - Bottom-up/Top-down手法実装、常時有効化（固定パラメータ）
+4. **評価指標** - IA-weighted Fmax（CAFA-6公式）、train/val split、before/after後処理比較
+5. **ドキュメント** - 全モジュールの詳細ドキュメント整備
 
 ---
 
-### 後処理の追加
+### 未完了タスク
 
-GOは階層的な構造を持つ。
-よって、モデルの予測でとあるGO, GO_aである確率が1に近い時、その上位概念(is_a)の確率も1に近いのが自然である。
-逆もまた然りで、GO_aの確率が0に近い時、その下位概念も0に近いのが自然である。
-この補正の実装には、以下の2つの設計のどちらかを選択する必要がある。
-1. とある下位GOの確率が高い時,その上位GOの確率を引き上げる
-2. とある上位GOの確率が低い時,その下位GOの確率を引き下げる
+以下のタスクは今後の改善候補です。
 
----
-
-### JointModelの改善
+#### 1. JointModelの改善
 
 JointModelは二つのEmbeddingを単純な線型結合層一つで変換するかなり単純なモデルである。
 もう少し複雑なモデルにすることで精度改善が期待できる。
 具体的にはTransformerのAttention機構を一層でいいので追加できると良いと考えている。
 何故なら、本タスクの目的は本質的にアミノ酸配列とそれに対応する辞書を作成することに近似でき、それはAttention機構のkey, valueに対応すると考えられるからである。
+しかし、TransformerのAttention機構は計算が重たいので、要検討である。
+
+#### 2. ESM-2推論の高速化
+
+特にESM-2による推論部分に大きな時間がかかっている。この部分の推論時間短縮に成功すれば、その分のリソースを他に回せる。
 
 ---
 
-### 推論時間短縮
-
-特にesm2による推論部分に大きな時間がかかっている。
-この部分の推論時間短縮に成功すれば、その分のリソースを他に回せる
-
---- 
-
-### 使っていないinputの使用
+### 追加データの活用
 
 現在はinputの中でも使っていない情報が多数ある。
 これらを使用することで最終的なoutputの精度向上が期待できる。
 使用方法は必ずしも機械学習や深層学習的手法に限らず、前処理や後述する後処理への使用も検討される。
 ただし、test時に使えない情報の扱いには注意が必要である。
 
-#### 1. `IA.tsv` (Information Accretion weights)
+#### 1. `IA.tsv` (Information Accretion weights) ✅ 一部実装済み
 - **内容**: 各GO termに対する重要度スコア(Information Accretion)
-- **用途**:
-  - 評価指標として使用される(コンペのメトリクスに関連)
+- **実装済み**:
+  - ✅ 評価指標として使用 ([evaluation.py](src/evaluation.py)で`compute_ia_weighted_fmax()`)
+  - ✅ IA-weighted Precision/Recall/Fmaxの計算（CAFA-6公式メトリクス）
+- **未実装** (今後の改善候補):
   - 予測時の閾値調整: IA値が高いGO termは予測を慎重に行う
   - 損失関数の重み付け: IA値に応じて損失に重みを付ける
   - スコアキャリブレーション: 重要なGO termの予測確率を調整
@@ -394,41 +553,26 @@ JointModelは二つのEmbeddingを単純な線型結合層一つで変換する�
   - ヘッダー内の追加情報(もしあれば)の活用
 - **注意**: 現在は配列のみを使用しているが、ヘッダー情報の解析も検討
 
-#### 6. `go-basic.obo`のidとname以外の情報
+#### 6. `go-basic.obo`のidとname以外の情報 ✅ 一部実装済み
 - **内容**: GO ontologyの詳細構造
-  - `is_a`: 親子関係(階層構造)
-  - `def`: GO termの定義文
-  - `namespace`: biological_process / molecular_function / cellular_component
-  - `relationship`: その他の関係性(part_of, regulates等)
-  - `alt_id`: 代替ID
-  - `is_obsolete`: 廃止されたGO term
-- **用途**:
-  - **is_a関係**:
-    - 階層的な後処理(前述の「後処理の追加」セクション参照)
-    - Graph Neural Network (GNN)による埋め込み学習
-    - 予測の伝播: 子ノードの予測から親ノードの予測を補正
-  - **def(定義文)**:
-    - ✅ 現在使用中: GO termのnameとdefを結合してテキストembeddingを生成
-    - 改善の余地: defの前処理方法の最適化(引用符除去以外の手法も検討)
-  - **namespace**:
-    - aspect別モデルの構築に使用
-  - **relationship**:
-    - より複雑なグラフ構造の学習
-    - 異なる関係性に基づく制約の追加
-  - **is_obsolete**:
-    - 廃止されたGO termを予測候補から除外
+- **実装済み**:
+  - ✅ **is_a関係**: 階層的な後処理 ([hierarchical_postprocess.py](src/hierarchical_postprocess.py))
+    - Bottom-up伝播とTop-down抑制による整合性保証
+  - ✅ **def(定義文)**: GO termのnameとdefを結合してテキストembeddingを生成 ([go_embedding.py](src/go_embedding.py))
+  - ✅ **namespace**: parse時に取得済み（aspect別モデリングへの活用は未実装）
+- **未実装** (今後の改善候補):
+  - **is_a関係**: Graph Neural Network (GNN)による埋め込み学習
+  - **def(定義文)**: より高度な前処理方法の最適化
+  - **namespace**: aspect別モデルの構築
+  - **relationship**: その他の関係性(part_of, regulates等)を用いた制約
+  - **is_obsolete**: 廃止されたGO termの除外処理
 
-#### 実装の優先順位(推奨)
-1. **高優先度**(未実装):
-   - `is_a`関係: 階層的後処理
-   - `namespace`/`aspect`: aspect別モデリング
-2. **中優先度**(未実装):
-   - `IA.tsv`: 損失関数の重み付けやスコアキャリブレーション
-   - `testsuperset-taxon-list.tsv`: 生物種条件付き予測
-   - `train_taxonomy.tsv`: 生物種情報のembedding統合
-3. **低優先度**(未実装):
-   - その他の`relationship`: より複雑なグラフ構造
-   - FASTAヘッダーの詳細解析
+**実装の優先順位(推奨):**
+
+1. **高優先度**: `namespace`/`aspect`を用いたaspect別モデリング
+2. **中優先度**: 生物種情報の活用 (`train_taxonomy.tsv`, `testsuperset-taxon-list.tsv`)
+3. **中優先度**: IA重みを用いた損失関数の改善
+4. **低優先度**: その他のGO relationship、FASTAヘッダー解析
 
 ---
 
