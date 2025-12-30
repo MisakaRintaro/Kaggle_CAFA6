@@ -99,20 +99,48 @@ def create_protein_go_label_matrix(
     y_list = []
     protein_ids = []
 
+    # デバッグ情報: サンプルIDを確認
+    emb_sample_ids = list(protein_emb_dict.keys())[:5]
+    label_sample_ids = list(protein_to_go_terms.keys())[:5]
+
+    print(f"DEBUG: Protein embedding dict size: {len(protein_emb_dict)}")
+    print(f"DEBUG: Protein labels dict size: {len(protein_to_go_terms)}")
+    print(f"DEBUG: Sample embedding IDs: {emb_sample_ids}")
+    print(f"DEBUG: Sample label IDs: {label_sample_ids}")
+
     for (protein_id, taxon_id), emb in protein_emb_dict.items():
+        # Extract UniProt accession from full header if needed
+        # Format: "sp|A0A0C5B5G6|MOTSC_HUMAN" -> "A0A0C5B5G6"
+        if '|' in protein_id:
+            accession = protein_id.split('|')[1]
+        else:
+            accession = protein_id
+
         # このタンパク質のラベルが存在するかチェック
-        if protein_id in protein_to_go_terms:
+        if accession in protein_to_go_terms:
             # 埋め込みベクトルを追加
             X_list.append(emb)
 
             # マルチラベルベクトルを作成（全GO termに対して0/1）
             label_vec = np.zeros(num_go, dtype=np.float32)
-            for go_term in protein_to_go_terms[protein_id]:
+            for go_term in protein_to_go_terms[accession]:
                 idx = go_id_to_idx[go_term]
                 label_vec[idx] = 1.0
 
             y_list.append(label_vec)
             protein_ids.append((protein_id, taxon_id))
+
+    # データが空でないかチェック
+    if len(X_list) == 0:
+        raise ValueError(
+            f"No matching proteins found between embeddings and labels!\n"
+            f"  Embedding dict size: {len(protein_emb_dict)}\n"
+            f"  Label dict size: {len(protein_to_go_terms)}\n"
+            f"  Sample embedding IDs: {emb_sample_ids}\n"
+            f"  Sample label IDs: {label_sample_ids}\n"
+            f"This usually means the protein IDs in the embedding file don't match "
+            f"the IDs in the label file. Check the ID format (e.g., with/without taxon)."
+        )
 
     # 4. numpy配列に変換
     X = np.stack(X_list, axis=0)  # (num_proteins, protein_emb_dim)
