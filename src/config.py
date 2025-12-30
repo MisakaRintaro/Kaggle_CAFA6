@@ -24,6 +24,16 @@ OUTPUT_DIR.mkdir(exist_ok=True, parents=True)
 MODEL_DIR.mkdir(exist_ok=True, parents=True)
 EMBEDDING_DIR.mkdir(exist_ok=True, parents=True)
 
+# ============================================================================
+# Development Mode
+# ============================================================================
+
+# Set to True for quick testing with limited data
+DEV_TEST = True
+
+# Number of batches to process in DEV_TEST mode (for protein embedding)
+DEV_TEST_MAX_BATCHES = 100
+
 
 # ============================================================================
 # Input Data Paths
@@ -95,17 +105,6 @@ PATH_SUBMISSION = _paths['submission']
 
 
 # ============================================================================
-# Development Mode
-# ============================================================================
-
-# Set to True for quick testing with limited data
-DEV_TEST = False
-
-# Number of batches to process in DEV_TEST mode (for protein embedding)
-DEV_TEST_MAX_BATCHES = 100
-
-
-# ============================================================================
 # Model Hyperparameters
 # ============================================================================
 
@@ -118,6 +117,7 @@ GO_MAX_TEXT_LENGTH = 256
 
 # Joint model architecture
 JOINT_DIM = 256  # Dimension of joint embedding space
+DROPOUT = 0.1  # Dropout rate for regularization in cross-attention layers
 
 # Training parameters
 TRAIN_BATCH_SIZE = 16
@@ -127,12 +127,6 @@ LEARNING_RATE = 1e-3
 # Prediction parameters
 TOP_K_PREDICTIONS = 100  # Number of GO terms to predict per protein
 ADD_TEXT_DESCRIPTIONS = False  # Whether to add text descriptions in submission
-
-# Hierarchical postprocessing parameters
-ENABLE_HIERARCHICAL_POSTPROCESS = True  # Whether to apply hierarchical postprocessing
-HIERARCHICAL_ALPHA = 0.3  # Bottom-up propagation coefficient
-HIERARCHICAL_THRESHOLD = 0.3  # Top-down suppression threshold
-HIERARCHICAL_BETA = 0.5  # Top-down suppression relaxation coefficient
 
 # Evaluation parameters
 ENABLE_VALIDATION = True  # Whether to perform validation during training

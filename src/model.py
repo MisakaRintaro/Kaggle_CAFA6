@@ -4,12 +4,13 @@
 Model definitions for CAFA-6 competition.
 
 This module provides:
-- JointModel: Dual-encoder model for protein-GO term matching
+- JointModel: Dual-encoder model with cross-attention for protein-GO term matching
 - ProteinGODataset: Dataset class for training
 - Helper functions for creating training data
 """
 
 from typing import Dict, List, Tuple
+import math
 import numpy as np
 import pandas as pd
 import torch
@@ -130,111 +131,141 @@ def create_protein_go_label_matrix(
 
 class JointModel(nn.Module):
     """
-    Dual-encoder model for protein-GO term matching.
+    Dual-encoder model with Cross-Attention mechanism for protein-GO term matching.
 
-    - タンパク質埋め込み (ESM) h_p ∈ R^640
-    - GO埋め込み (LLM)     g_t ∈ R^d_llm
+    This model uses cross-attention to allow the protein embedding to "attend to"
+    different GO terms, learning which GO terms are most relevant for each protein.
 
-    の両方に線形変換をかけて、同じ joint 空間 (R^d_joint) にマッピングするモデル。
+    Architecture:
+        1. タンパク質埋め込み → Linear(480 → 256) → z_p
+        2. GO埋め込み群 → Linear(768 → 256) → E_go
+        3. Cross-Attention:
+           - Query = Linear(z_p)
+           - Key = Linear(E_go)
+           - Attention Score = (Q @ K.T) / sqrt(d_k)
+        4. Dropout for regularization
 
-        z_p = protein_fc(h_p)         ∈ R^d_joint
-        e_t = go_fc(g_t)              ∈ R^d_joint
-        score(p, t) = <z_p, e_t>      （内積）
-
-    このクラスでは:
-    - ESM本体、LLM本体の重みは更新しない（事前に計算済みの埋め込みを使う）
-    - 学習するのは protein_fc と go_fc のみ
+    Parameters
+    ----------
+    input_dim_protein : int
+        Dimension of protein embeddings (e.g., 480 for ESM-2)
+    input_dim_go : int
+        Dimension of GO embeddings (e.g., 768 for BiomedBERT)
+    joint_dim : int
+        Dimension of the joint embedding space (e.g., 256)
+    go_raw_emb : torch.Tensor
+        Pre-computed GO embeddings, shape = (num_go, input_dim_go)
+    dropout : float
+        Dropout probability for regularization (default: 0.1)
     """
 
     def __init__(
         self,
-        input_dim_protein: int,   # 例: 480 (ESM埋め込み次元)
-        input_dim_go: int,        # 例: 768 (LLM埋め込み次元)
-        joint_dim: int,           # 例: 256 (joint 空間の次元)
-        go_raw_emb: torch.Tensor, # shape = (num_go, input_dim_go)
+        input_dim_protein: int,
+        input_dim_go: int,
+        joint_dim: int,
+        go_raw_emb: torch.Tensor,
+        dropout: float = 0.1
     ) -> None:
         super().__init__()
 
-        # タンパク質側: input_dim_protein → joint_dim
+        # Protein encoder: input_dim_protein → joint_dim
         self.protein_fc = nn.Linear(input_dim_protein, joint_dim)
 
-        # GO側: input_dim_go → joint_dim
+        # GO encoder: input_dim_go → joint_dim
         self.go_fc = nn.Linear(input_dim_go, joint_dim)
 
-        # 事前計算済みの GO 生埋め込み（LLM の出力）をモデル内に持たせる
-        # 学習対象ではないので register_buffer を使う
-        # go_raw_emb の shape は (num_go, input_dim_go) を想定
+        # Cross-Attention components
+        self.attn_query = nn.Linear(joint_dim, joint_dim)
+        self.attn_key = nn.Linear(joint_dim, joint_dim)
+
+        # Regularization
+        self.dropout = nn.Dropout(dropout)
+
+        # Scaling factor for attention scores
+        self.scale = math.sqrt(joint_dim)
+
+        # Pre-computed GO embeddings (not trainable)
         self.register_buffer("go_raw_emb", go_raw_emb)
 
     @property
     def num_go(self) -> int:
-        """GO の種類数を返すプロパティ。"""
+        """Number of GO terms."""
         return self.go_raw_emb.size(0)
 
     def encode_protein(self, h_p: torch.Tensor) -> torch.Tensor:
         """
-        タンパク質埋め込みを joint 空間に写像する関数。
+        Encode protein embeddings into joint space.
 
         Parameters
         ----------
         h_p : torch.Tensor
             shape = (batch_size, input_dim_protein)
-            事前に計算された ESM 埋め込みのミニバッチ。
+            Pre-computed protein embeddings (ESM-2)
 
         Returns
         -------
         torch.Tensor
             shape = (batch_size, joint_dim)
-            joint 空間でのタンパク質ベクトル z_p。
+            Protein vectors in joint space
         """
         z_p = self.protein_fc(h_p)
         return z_p
 
     def encode_go(self) -> torch.Tensor:
         """
-        全ての GO を joint 空間に写像した行列を返す。
+        Encode all GO terms into joint space.
 
         Returns
         -------
         torch.Tensor
             shape = (num_go, joint_dim)
-            各行が 1 つの GO に対応する joint 空間でのベクトル e_t。
+            GO term vectors in joint space
         """
-        # go_raw_emb: (num_go, input_dim_go)
-        e_go = self.go_fc(self.go_raw_emb)  # (num_go, joint_dim)
+        e_go = self.go_fc(self.go_raw_emb)
         return e_go
 
     def forward(self, h_batch: torch.Tensor) -> torch.Tensor:
         """
-        タンパク質埋め込みのバッチから、全 GO に対するスコア行列を計算する。
+        Compute attention-based scores for all GO terms.
+
+        Uses cross-attention mechanism where protein embeddings act as
+        queries and GO embeddings act as keys. The attention scores
+        directly represent the relevance of each GO term to the protein.
 
         Parameters
         ----------
         h_batch : torch.Tensor
             shape = (batch_size, input_dim_protein)
-            ミニバッチのタンパク質埋め込み。
+            Batch of protein embeddings
 
         Returns
         -------
         torch.Tensor
             shape = (batch_size, num_go)
-            各サンプル・各 GO に対するスコア（logits）。
-            損失関数 BCEWithLogitsLoss にそのまま渡せる。
+            Attention scores (logits) for each protein-GO pair
         """
-        # タンパク質を joint 空間へ
-        z_p = self.encode_protein(h_batch)  # (B, D_joint)
+        # Encode protein and GO into joint space
+        z_p = self.encode_protein(h_batch)  # (B, D)
+        e_go = self.encode_go()              # (G, D)
 
-        # 全 GO を joint 空間へ
-        e_go = self.encode_go()             # (G, D_joint)
+        # Apply dropout to joint embeddings
+        z_p = self.dropout(z_p)
+        e_go = self.dropout(e_go)
 
-        # 内積でスコア行列を計算:
-        #   (B, D) @ (D, G) -> (B, G)
-        scores = z_p @ e_go.t()
+        # Cross-Attention: Protein → Query, GO → Key
+        Q = self.attn_query(z_p)   # (B, D)
+        K = self.attn_key(e_go)    # (G, D)
+
+        # Compute attention scores: (B, D) @ (D, G) → (B, G)
+        # Scaled dot-product attention
+        scores = (Q @ K.t()) / self.scale
+
         return scores
 
     def predict_proba(self, h_batch: torch.Tensor) -> torch.Tensor:
         """
-        各タンパク質・各 GO に対する「確率」(0〜1) を返すユーティリティ。
+        Predict probabilities for each protein-GO pair.
 
         Parameters
         ----------
@@ -245,7 +276,7 @@ class JointModel(nn.Module):
         -------
         torch.Tensor
             shape = (batch_size, num_go)
-            シグモイドをかけた後の確率。
+            Probabilities after sigmoid activation
         """
         logits = self.forward(h_batch)
         probs = torch.sigmoid(logits)

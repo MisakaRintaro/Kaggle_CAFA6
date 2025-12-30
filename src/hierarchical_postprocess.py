@@ -9,11 +9,33 @@ This module provides functions for:
 - Bottom-up propagation (child → parent)
 - Top-down suppression (parent → child)
 - Hybrid hierarchical postprocessing
+
+Fixed Parameters:
+- ALPHA = 0.3 (Bottom-up propagation coefficient)
+- THRESHOLD = 0.3 (Top-down suppression threshold)
+- BETA = 0.5 (Top-down suppression relaxation coefficient)
 """
 
 from typing import Dict, List, Tuple
 from collections import deque, defaultdict
 import numpy as np
+
+
+# ============================================================================
+# Fixed Parameters for Hierarchical Postprocessing
+# ============================================================================
+
+# Bottom-up propagation coefficient
+# Controls how much child scores propagate to parent scores
+ALPHA = 0.3
+
+# Top-down suppression threshold
+# Parents below this threshold will suppress their children
+THRESHOLD = 0.3
+
+# Top-down suppression relaxation coefficient
+# Controls the strength of suppression
+BETA = 0.5
 
 
 def build_parent_to_children(
@@ -98,7 +120,7 @@ def bottom_up_propagation(
     scores: Dict[str, float],
     parent_to_children: Dict[str, List[str]],
     topological_order: List[str],
-    alpha: float = 0.3
+    alpha: float = ALPHA
 ) -> Dict[str, float]:
     """
     Bottom-up伝播: 子の最大スコアで親のスコアを引き上げる
@@ -145,8 +167,8 @@ def top_down_suppression(
     scores: Dict[str, float],
     parent_to_children: Dict[str, List[str]],
     topological_order: List[str],
-    threshold: float = 0.3,
-    beta: float = 0.5
+    threshold: float = THRESHOLD,
+    beta: float = BETA
 ) -> Dict[str, float]:
     """
     Top-down抑制: 親のスコアが低い場合、子のスコアを抑制する
@@ -195,9 +217,9 @@ def top_down_suppression(
 def hierarchical_postprocess(
     predictions: Dict[str, float],
     child_to_parents: Dict[str, List[str]],
-    alpha: float = 0.3,
-    threshold: float = 0.3,
-    beta: float = 0.5
+    alpha: float = ALPHA,
+    threshold: float = THRESHOLD,
+    beta: float = BETA
 ) -> Dict[str, float]:
     """
     階層的後処理のハイブリッドアプローチ
@@ -251,9 +273,9 @@ def hierarchical_postprocess(
 def apply_hierarchical_postprocess_to_all_proteins(
     predictions: Dict[Tuple[str, str], List[Tuple[str, float]]],
     child_to_parents: Dict[str, List[str]],
-    alpha: float = 0.3,
-    threshold: float = 0.3,
-    beta: float = 0.5
+    alpha: float = ALPHA,
+    threshold: float = THRESHOLD,
+    beta: float = BETA
 ) -> Dict[Tuple[str, str], List[Tuple[str, float]]]:
     """
     全タンパク質の予測結果に階層的後処理を適用する

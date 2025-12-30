@@ -36,14 +36,11 @@ from config import (
     NUM_EPOCHS,
     LEARNING_RATE,
     JOINT_DIM,
+    DROPOUT,
     TOP_K_PREDICTIONS,
     ADD_TEXT_DESCRIPTIONS,
     DEV_TEST,
     DEV_TEST_MAX_BATCHES,
-    ENABLE_HIERARCHICAL_POSTPROCESS,
-    HIERARCHICAL_ALPHA,
-    HIERARCHICAL_THRESHOLD,
-    HIERARCHICAL_BETA,
     ENABLE_VALIDATION,
     VAL_SPLIT_RATIO,
     VAL_RANDOM_SEED,
@@ -269,10 +266,10 @@ def main():
     print(f"Training dataset created with {len(train_dataset)} samples")
 
     # ========================================================================
-    # Step 5: Train or load the JointModel
+    # Step 5: Model Training and Validation
     # ========================================================================
     print("\n" + "="*80)
-    print("Step 5: Training the JointModel")
+    print("Step 5: Model Training and Validation")
     print("="*80)
 
     # Check if trained model already exists
@@ -317,12 +314,12 @@ def main():
         )
 
     # ========================================================================
-    # Step 6: Validation Evaluation
+    # Step 5 (continued): Validation Evaluation
     # ========================================================================
     if ENABLE_VALIDATION and val_loader is not None:
-        print("\n" + "="*80)
-        print("Step 6: Evaluating on validation set")
-        print("="*80)
+        print("\n" + "-"*80)
+        print("Evaluating on validation set")
+        print("-"*80)
 
         # Make predictions on validation set
         model.eval()
@@ -342,9 +339,12 @@ def main():
         print(f"Loading IA weights from {PATH_IA}...")
         ia_weights = load_ia_weights(str(PATH_IA))
 
-        # Evaluate predictions
-        print("Computing evaluation metrics...")
-        metrics = evaluate_predictions(
+        # --- Evaluate without hierarchical postprocessing ---
+        print("\n" + "="*60)
+        print("Evaluating WITHOUT hierarchical postprocessing...")
+        print("="*60)
+
+        metrics_before = evaluate_predictions(
             y_val,
             y_val_pred,
             go_id_list,
@@ -352,25 +352,88 @@ def main():
             threshold=0.5
         )
 
-        # Print results
         print("\n" + "-"*60)
-        print("VALIDATION RESULTS")
+        print("VALIDATION RESULTS (Before Hierarchical Postprocessing)")
         print("-"*60)
-        print_evaluation_results(metrics)
+        print_evaluation_results(metrics_before)
         print("-"*60)
 
-        # Save metrics to file
+        # --- Apply hierarchical postprocessing ---
+        print("\n" + "="*60)
+        print("Applying hierarchical postprocessing to validation predictions...")
+        print("="*60)
+
+        # Convert validation predictions to dict format for postprocessing
+        val_predictions_dict = {}
+        for i, protein_id in enumerate(val_protein_ids_list):
+            # Get top predictions for this protein
+            protein_scores = y_val_pred[i]
+            # Create list of (go_id, score) tuples
+            go_scores = [(go_id_list[j], float(protein_scores[j])) for j in range(len(go_id_list))]
+            val_predictions_dict[protein_id] = go_scores
+
+        # Apply hierarchical postprocessing (with fixed parameters)
+        val_predictions_dict = apply_hierarchical_postprocess_to_all_proteins(
+            val_predictions_dict,
+            child_to_parents
+        )
+
+        # Convert back to matrix format
+        y_val_pred_post = np.zeros_like(y_val_pred)
+        for i, protein_id in enumerate(val_protein_ids_list):
+            go_scores_dict = {go_id: score for go_id, score in val_predictions_dict[protein_id]}
+            for j, go_id in enumerate(go_id_list):
+                y_val_pred_post[i, j] = go_scores_dict.get(go_id, 0.0)
+
+        # Evaluate after postprocessing
+        print("Evaluating WITH hierarchical postprocessing...")
+        metrics_after = evaluate_predictions(
+            y_val,
+            y_val_pred_post,
+            go_id_list,
+            ia_weights,
+            threshold=0.5
+        )
+
+        print("\n" + "-"*60)
+        print("VALIDATION RESULTS (After Hierarchical Postprocessing)")
+        print("-"*60)
+        print_evaluation_results(metrics_after)
+        print("-"*60)
+
+        # Compare metrics
+        print("\n" + "="*60)
+        print("COMPARISON: Impact of Hierarchical Postprocessing")
+        print("="*60)
+        print(f"IA-weighted Fmax: {metrics_before['ia_fmax']:.4f} → {metrics_after['ia_fmax']:.4f} "
+              f"(Δ = {metrics_after['ia_fmax'] - metrics_before['ia_fmax']:+.4f})")
+        print(f"F1 Score:         {metrics_before['f1']:.4f} → {metrics_after['f1']:.4f} "
+              f"(Δ = {metrics_after['f1'] - metrics_before['f1']:+.4f})")
+        print("="*60)
+
+        # Save both metrics
+        all_metrics = {
+            'before_postprocessing': metrics_before,
+            'after_postprocessing': metrics_after,
+            'improvement': {
+                'ia_fmax': float(metrics_after['ia_fmax'] - metrics_before['ia_fmax']),
+                'f1': float(metrics_after['f1'] - metrics_before['f1'])
+            }
+        }
         metrics_path = PATH_TRAINED_MODEL.parent / f"{PATH_TRAINED_MODEL.stem}_val_metrics.json"
         with open(metrics_path, 'w') as f:
-            json.dump(metrics, f, indent=2)
+            json.dump(all_metrics, f, indent=2)
         print(f"\nValidation metrics saved to {metrics_path}")
 
     # ========================================================================
-    # Step 7: Load and embed test protein sequences
+    # Step 6: Test Inference
     # ========================================================================
     print("\n" + "="*80)
-    print("Step 7: Loading and embedding test sequences")
+    print("Step 6: Test Inference (Load, Embed, Predict)")
     print("="*80)
+    print("\n" + "-"*80)
+    print("Loading and embedding test sequences")
+    print("-"*80)
 
     # Check if test protein embeddings already exist
     if PATH_TEST_PROTEIN_EMB.exists():
@@ -407,12 +470,9 @@ def main():
 
     print(f"Number of test proteins: {len(test_protein_emb_dict)}")
 
-    # ========================================================================
-    # Step 8: Make predictions on test data
-    # ========================================================================
-    print("\n" + "="*80)
-    print("Step 8: Making predictions on test data")
-    print("="*80)
+    print("\n" + "-"*80)
+    print("Making predictions on test data")
+    print("-"*80)
 
     # Create test DataLoader
     test_loader = create_test_loader(
@@ -430,27 +490,23 @@ def main():
     )
 
     # ========================================================================
-    # Step 8.5: Apply hierarchical postprocessing (optional)
-    # ========================================================================
-    if ENABLE_HIERARCHICAL_POSTPROCESS:
-        print("\n" + "="*80)
-        print("Step 8.5: Applying hierarchical postprocessing")
-        print("="*80)
-
-        predictions = apply_hierarchical_postprocess_to_all_proteins(
-            predictions,
-            child_to_parents,
-            alpha=HIERARCHICAL_ALPHA,
-            threshold=HIERARCHICAL_THRESHOLD,
-            beta=HIERARCHICAL_BETA
-        )
-
-    # ========================================================================
-    # Step 9: Create submission file
+    # Step 7: Postprocessing and Submission
     # ========================================================================
     print("\n" + "="*80)
-    print("Step 9: Creating submission file")
+    print("Step 7: Postprocessing and Submission")
     print("="*80)
+    print("\n" + "-"*80)
+    print("Applying hierarchical postprocessing")
+    print("-"*80)
+
+    predictions = apply_hierarchical_postprocess_to_all_proteins(
+        predictions,
+        child_to_parents
+    )
+
+    print("\n" + "-"*80)
+    print("Creating submission file")
+    print("-"*80)
 
     create_submission_file(
         predictions,
