@@ -45,6 +45,9 @@ from config import (
     VAL_SPLIT_RATIO,
     VAL_RANDOM_SEED,
     VAL_STRATIFY_BY_LABEL_COUNT,
+    ENABLE_TRAINING,
+    EARLY_STOPPING_PATIENCE,
+    EARLY_STOPPING_MIN_DELTA,
     get_device,
     get_config_summary
 )
@@ -272,17 +275,14 @@ def main():
     print("Step 5: Model Training and Validation")
     print("="*80)
 
-    # Check if trained model already exists
-    if PATH_TRAINED_MODEL.exists():
-        print(f"Loading existing trained model from {PATH_TRAINED_MODEL}")
-        model, loaded_go_id_list, history = load_model(
-            str(PATH_TRAINED_MODEL),
-            go_emb_matrix,
-            device
-        )
-        # Verify GO ID list matches
-        assert loaded_go_id_list == go_id_list, "GO ID list mismatch!"
-    else:
+    # Check training mode
+    if ENABLE_TRAINING:
+        print("Training mode: ENABLED")
+        # Check if trained model already exists
+        if PATH_TRAINED_MODEL.exists():
+            print(f"Warning: Model file already exists at {PATH_TRAINED_MODEL}")
+            print("Training will overwrite the existing model.")
+
         print("Training new model...")
         # Get dimensions
         input_dim_protein = X_train.shape[1]
@@ -302,7 +302,10 @@ def main():
             train_loader,
             device,
             num_epochs=NUM_EPOCHS,
-            learning_rate=LEARNING_RATE
+            learning_rate=LEARNING_RATE,
+            val_loader=val_loader,
+            patience=EARLY_STOPPING_PATIENCE,
+            min_delta=EARLY_STOPPING_MIN_DELTA
         )
 
         # Save model
@@ -312,6 +315,30 @@ def main():
             go_id_list,
             history
         )
+    else:
+        print("Training mode: DISABLED")
+        print("Loading existing trained model...")
+
+        # Check if model file exists
+        if not PATH_TRAINED_MODEL.exists():
+            raise FileNotFoundError(
+                f"Model file not found at {PATH_TRAINED_MODEL}\n"
+                f"Please set ENABLE_TRAINING=True in config to train a new model."
+            )
+
+        # Load existing model
+        model, loaded_go_id_list, history = load_model(
+            str(PATH_TRAINED_MODEL),
+            go_emb_matrix,
+            device
+        )
+        # Verify GO ID list matches
+        if loaded_go_id_list != go_id_list:
+            raise ValueError(
+                f"GO ID list mismatch!\n"
+                f"Expected {len(go_id_list)} terms, but loaded model has {len(loaded_go_id_list)} terms.\n"
+                f"Please retrain the model with ENABLE_TRAINING=True."
+            )
 
     # ========================================================================
     # Step 5 (continued): Validation Evaluation
@@ -327,9 +354,11 @@ def main():
 
         with torch.no_grad():
             for batch in val_loader:
-                h_batch, _ = batch
-                h_batch = h_batch.to(device)
-                y_pred_proba = model.predict_proba(h_batch)
+                x_batch = batch['x'].to(device)
+                # Forward pass to get logits
+                logits = model(x_batch)
+                # Convert logits to probabilities using sigmoid
+                y_pred_proba = torch.sigmoid(logits)
                 y_val_pred_list.append(y_pred_proba.cpu().numpy())
 
         y_val_pred = np.vstack(y_val_pred_list)
