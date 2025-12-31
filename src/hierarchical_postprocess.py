@@ -19,6 +19,7 @@ Fixed Parameters:
 from typing import Dict, List, Tuple
 from collections import deque, defaultdict
 import numpy as np
+import gc
 
 
 # ============================================================================
@@ -325,9 +326,14 @@ def apply_hierarchical_postprocess_to_all_proteins(
 
         corrected_predictions[protein_id] = corrected_list
 
-        # 進捗表示
-        if (idx + 1) % 100 == 0 or (idx + 1) == total_proteins:
+        # 進捗表示（1000件ごとに表示してI/O削減）
+        if (idx + 1) % 1000 == 0 or (idx + 1) == total_proteins:
             print(f"Processed [{idx+1}/{total_proteins}] proteins")
+            # 定期的にガベージコレクションを実行してメモリを解放
+            gc.collect()
+
+        # メモリ管理: 中間データを削除
+        del prediction_dict, corrected_dict, corrected_list
 
     print("Hierarchical postprocessing completed!")
     return corrected_predictions
