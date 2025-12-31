@@ -55,10 +55,20 @@ def split_train_validation(
     # protein_id (タプルの最初の要素) のみを取得
     protein_id_strs = [pid[0] for pid in protein_ids]
 
+    # Extract UniProt accession from full header if needed
+    # Format: "sp|A0A0C5B5G6|MOTSC_HUMAN" -> "A0A0C5B5G6"
+    accession_strs = []
+    for pid in protein_id_strs:
+        if '|' in pid:
+            accession = pid.split('|')[1]
+        else:
+            accession = pid
+        accession_strs.append(accession)
+
     if stratify_by_label_count:
         # 各タンパク質のラベル数を計算
         label_counts = train_label_df['EntryID'].value_counts().to_dict()
-        protein_label_counts = [label_counts.get(pid, 0) for pid in protein_id_strs]
+        protein_label_counts = [label_counts.get(acc, 0) for acc in accession_strs]
 
         # ラベル数を離散化（層別化用）
         # ラベル数の分位数で層を作る
@@ -85,8 +95,23 @@ def split_train_validation(
         train_id_strs = [pid[0] for pid in train_ids]
         val_id_strs = [pid[0] for pid in val_ids]
 
-        train_label_counts = [label_counts.get(pid, 0) for pid in train_id_strs]
-        val_label_counts = [label_counts.get(pid, 0) for pid in val_id_strs]
+        # Extract accessions for train and val sets
+        train_accessions = []
+        for pid in train_id_strs:
+            if '|' in pid:
+                train_accessions.append(pid.split('|')[1])
+            else:
+                train_accessions.append(pid)
+
+        val_accessions = []
+        for pid in val_id_strs:
+            if '|' in pid:
+                val_accessions.append(pid.split('|')[1])
+            else:
+                val_accessions.append(pid)
+
+        train_label_counts = [label_counts.get(acc, 0) for acc in train_accessions]
+        val_label_counts = [label_counts.get(acc, 0) for acc in val_accessions]
 
         print(f"  Train avg labels per protein: {np.mean(train_label_counts):.2f}")
         print(f"  Val avg labels per protein: {np.mean(val_label_counts):.2f}")
