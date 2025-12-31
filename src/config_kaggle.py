@@ -120,9 +120,12 @@ JOINT_DIM = 256  # Dimension of joint embedding space
 DROPOUT = 0.1  # Dropout rate for regularization in cross-attention layers
 
 # Training parameters
+ENABLE_TRAINING = True  # Whether to train model (False = load existing model)
 TRAIN_BATCH_SIZE = 16
 NUM_EPOCHS = 10
 LEARNING_RATE = 1e-3
+EARLY_STOPPING_PATIENCE = 3  # Number of epochs with no improvement to wait before stopping
+EARLY_STOPPING_MIN_DELTA = 0.01  # Minimum relative improvement rate (1% = 0.01)
 
 # Prediction parameters
 TOP_K_PREDICTIONS = 100  # Number of GO terms to predict per protein

@@ -20,7 +20,10 @@ def train_model(
     train_loader: DataLoader,
     device: torch.device,
     num_epochs: int = 10,
-    learning_rate: float = 1e-3
+    learning_rate: float = 1e-3,
+    val_loader: DataLoader = None,
+    patience: int = 3,
+    min_delta: float = 0.01
 ) -> Dict[str, List[float]]:
     """
     JointModelを訓練する関数
@@ -37,6 +40,12 @@ def train_model(
         エポック数
     learning_rate : float
         学習率
+    val_loader : DataLoader, optional
+        検証データのDataLoader。Noneの場合はearly stoppingなし
+    patience : int
+        Early stoppingのpatience（改善が見られないエポック数の許容値）
+    min_delta : float
+        改善と見なすための最小相対改善率（例: 0.01 = 1%改善）
 
     Returns
     -------
@@ -54,8 +63,14 @@ def train_model(
     history = {
         'epoch': [],
         'loss': [],
-        'avg_loss': []
+        'avg_loss': [],
+        'val_loss': []
     }
+
+    # Early stopping用の変数
+    best_val_loss = float('inf')
+    patience_counter = 0
+    best_model_state = None
 
     print(f"Starting training...")
     print(f"  Device: {device}")
@@ -64,6 +79,12 @@ def train_model(
     print(f"  Batch size: {train_loader.batch_size}")
     print(f"  Number of batches per epoch: {len(train_loader)}")
     print(f"  Total training samples: {len(train_loader.dataset)}")
+    if val_loader is not None:
+        print(f"  Validation enabled: Yes")
+        print(f"  Validation samples: {len(val_loader.dataset)}")
+        print(f"  Early stopping patience: {patience}")
+    else:
+        print(f"  Validation enabled: No")
     print()
 
     for epoch in range(num_epochs):
@@ -103,11 +124,65 @@ def train_model(
         history['loss'].extend(epoch_losses)
         history['avg_loss'].append(avg_epoch_loss)
 
-        print(f"Epoch [{epoch+1}/{num_epochs}] completed. "
-              f"Average Loss: {avg_epoch_loss:.4f}")
+        # Validation loss計算
+        val_loss = None
+        if val_loader is not None:
+            model.eval()
+            val_losses = []
+            with torch.no_grad():
+                for batch in val_loader:
+                    x_batch = batch['x'].to(device)
+                    y_batch = batch['y'].to(device)
+                    logits = model(x_batch)
+                    loss = criterion(logits, y_batch)
+                    val_losses.append(loss.item())
+
+            val_loss = np.mean(val_losses)
+            history['val_loss'].append(val_loss)
+
+            print(f"Epoch [{epoch+1}/{num_epochs}] completed. "
+                  f"Train Loss: {avg_epoch_loss:.4f}, Val Loss: {val_loss:.4f}")
+
+            # Early stopping チェック
+            # 相対的改善率 = (best_val_loss - val_loss) / best_val_loss
+            if best_val_loss == float('inf'):
+                # 初回は無条件で記録
+                improvement_rate = float('inf')
+            else:
+                improvement_rate = (best_val_loss - val_loss) / best_val_loss
+
+            # min_delta（デフォルト0.001 = 0.1%）以上の相対改善があれば記録更新
+            if improvement_rate > min_delta:
+                best_val_loss = val_loss
+                patience_counter = 0
+                # ベストモデルを保存
+                best_model_state = {k: v.cpu().clone() for k, v in model.state_dict().items()}
+                print(f"  → New best validation loss! (improvement rate: {improvement_rate*100:.2f}%)")
+            else:
+                patience_counter += 1
+                if best_val_loss == float('inf'):
+                    print(f"  → No improvement. Patience: {patience_counter}/{patience}")
+                else:
+                    print(f"  → No improvement (rate: {improvement_rate*100:.2f}% < {min_delta*100:.2f}%). "
+                          f"Patience: {patience_counter}/{patience}")
+
+                if patience_counter >= patience:
+                    print(f"\nEarly stopping triggered! No improvement for {patience} epochs.")
+                    print(f"Best validation loss: {best_val_loss:.4f}")
+                    # ベストモデルの重みを復元
+                    if best_model_state is not None:
+                        model.load_state_dict({k: v.to(device) for k, v in best_model_state.items()})
+                        print("Restored best model weights.")
+                    break
+        else:
+            print(f"Epoch [{epoch+1}/{num_epochs}] completed. "
+                  f"Average Loss: {avg_epoch_loss:.4f}")
+
         print("-" * 60)
 
     print("Training completed!")
+    if val_loader is not None and best_val_loss < float('inf'):
+        print(f"Best validation loss: {best_val_loss:.4f}")
     return history
 
 
@@ -177,7 +252,7 @@ def load_model(
     history : Dict[str, List[float]]
         訓練履歴
     """
-    from .model import JointModel
+    from model import JointModel
 
     checkpoint = torch.load(filepath, map_location=device, weights_only=False)
 

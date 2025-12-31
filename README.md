@@ -360,11 +360,29 @@ TRAIN_BATCH_SIZE = 16
 NUM_EPOCHS = 10
 LEARNING_RATE = 1e-3
 
+# Training control
+ENABLE_TRAINING = True  # Set to False to skip training and load existing model
+
 # Evaluation
 ENABLE_VALIDATION = True
 VAL_SPLIT_RATIO = 0.2
 VAL_STRATIFY_BY_LABEL_COUNT = True
+
+# Early stopping
+EARLY_STOPPING_PATIENCE = 3  # Number of epochs with no improvement before stopping
+EARLY_STOPPING_MIN_DELTA = 0.01  # Minimum relative improvement rate (1% = 0.01)
 ```
+
+**Training Control:**
+
+Set `ENABLE_TRAINING = False` to skip model training and load a pre-trained model instead. This is useful during debugging to avoid re-training on every run:
+
+```python
+# Skip training and load existing model
+ENABLE_TRAINING = False
+```
+
+**Note:** If `ENABLE_TRAINING = False` and the model file doesn't exist, an error will be raised. Train the model at least once with `ENABLE_TRAINING = True` before disabling training.
 
 **Hierarchical Postprocessing Parameters:**
 
