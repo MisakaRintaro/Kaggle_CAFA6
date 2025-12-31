@@ -131,6 +131,12 @@ EARLY_STOPPING_MIN_DELTA = 0.01  # Minimum relative improvement rate (1% = 0.01)
 USE_POS_WEIGHT = True  # Whether to use pos_weight for handling class imbalance
 POS_WEIGHT_CLIP_MAX = 100.0  # Maximum value for pos_weight to prevent extreme values
 
+# Negative sampling
+USE_NEGATIVE_SAMPLING = True  # Whether to use negative sampling (alternative to pos_weight)
+NUM_NEGATIVE_SAMPLES = 100  # Number of negative samples per protein (recommended: 500-5000)
+# Note: USE_NEGATIVE_SAMPLING and USE_POS_WEIGHT are mutually exclusive
+# If both are True, USE_NEGATIVE_SAMPLING takes precedence
+
 # Prediction parameters
 TOP_K_PREDICTIONS = 100  # Number of GO terms to predict per protein
 ADD_TEXT_DESCRIPTIONS = False  # Whether to add text descriptions in submission

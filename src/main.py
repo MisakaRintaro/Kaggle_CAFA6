@@ -50,6 +50,8 @@ from config import (
     EARLY_STOPPING_MIN_DELTA,
     USE_POS_WEIGHT,
     POS_WEIGHT_CLIP_MAX,
+    USE_NEGATIVE_SAMPLING,
+    NUM_NEGATIVE_SAMPLES,
     get_device,
     get_config_summary
 )
@@ -299,9 +301,9 @@ def main():
             go_raw_emb=go_emb_matrix
         )
 
-        # Compute pos_weight for class imbalance handling
+        # Compute pos_weight for class imbalance handling (if not using negative sampling)
         pos_weight = None
-        if USE_POS_WEIGHT:
+        if USE_POS_WEIGHT and not USE_NEGATIVE_SAMPLING:
             print("\nComputing pos_weight for class imbalance handling...")
             pos_weight = compute_pos_weight(
                 y_train,
@@ -318,7 +320,9 @@ def main():
             val_loader=val_loader,
             patience=EARLY_STOPPING_PATIENCE,
             min_delta=EARLY_STOPPING_MIN_DELTA,
-            pos_weight=pos_weight
+            pos_weight=pos_weight,
+            use_negative_sampling=USE_NEGATIVE_SAMPLING,
+            num_negative_samples=NUM_NEGATIVE_SAMPLES
         )
 
         # Save model

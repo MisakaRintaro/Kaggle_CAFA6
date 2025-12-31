@@ -367,6 +367,10 @@ ENABLE_TRAINING = True  # Set to False to skip training and load existing model
 USE_POS_WEIGHT = True  # Use pos_weight to handle class imbalance
 POS_WEIGHT_CLIP_MAX = 100.0  # Maximum pos_weight value
 
+# Negative sampling (alternative to pos_weight)
+USE_NEGATIVE_SAMPLING = False  # Use negative sampling instead
+NUM_NEGATIVE_SAMPLES = 1000  # Number of negative samples per protein
+
 # Evaluation
 ENABLE_VALIDATION = True
 VAL_SPLIT_RATIO = 0.2
@@ -392,23 +396,39 @@ ENABLE_TRAINING = False
 
 The dataset has severe class imbalance - most proteins have only a few GO term annotations out of thousands of possible terms. This causes the model to predict mostly zeros.
 
-To address this, we use `pos_weight` in the loss function:
+We provide two approaches to address this:
+
+**Approach 1: Positive Weighting** (default)
 
 ```python
-# Enable pos_weight to give higher weight to positive samples
 USE_POS_WEIGHT = True
-
-# Clip maximum weight to prevent extreme values
 POS_WEIGHT_CLIP_MAX = 100.0
 ```
 
-**How pos_weight works:**
-- For each GO term, calculates `pos_weight = (# negative samples) / (# positive samples)`
-- Rare GO terms get higher weights, forcing the model to pay attention to them
-- Prevents the model from just predicting all zeros
-- Clipping prevents extreme weights for very rare terms
+- Calculates `pos_weight = (# negative samples) / (# positive samples)` for each GO term
+- Rare GO terms get higher weights
+- Prevents the model from predicting all zeros
+- Clipping prevents extreme weights
 
-Set `USE_POS_WEIGHT = False` to disable this feature and use standard BCE loss.
+**Approach 2: Negative Sampling** (recommended for large datasets)
+
+```python
+USE_NEGATIVE_SAMPLING = True
+NUM_NEGATIVE_SAMPLES = 1000  # Recommended: 500-5000
+```
+
+- Uses ALL positive GO terms per protein
+- Randomly samples K negative GO terms per protein
+- Computes loss only on sampled subset (positive + K negatives)
+- More efficient than full BCE when total GO terms >> positive terms
+
+**How it works:**
+- Instead of computing loss over all ~30k GO terms
+- Each protein uses ~10-100 positives + 1000 sampled negatives
+- Reduces negative sample dominance
+- Faster training with large label spaces
+
+**Note:** The two approaches are mutually exclusive. If both are enabled, `USE_NEGATIVE_SAMPLING` takes precedence.
 
 **Hierarchical Postprocessing Parameters:**
 

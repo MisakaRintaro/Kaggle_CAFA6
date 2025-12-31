@@ -24,7 +24,9 @@ def train_model(
     val_loader: DataLoader = None,
     patience: int = 3,
     min_delta: float = 0.01,
-    pos_weight: torch.Tensor = None
+    pos_weight: torch.Tensor = None,
+    use_negative_sampling: bool = False,
+    num_negative_samples: int = 1000
 ) -> Dict[str, List[float]]:
     """
     JointModelを訓練する関数
@@ -51,6 +53,12 @@ def train_model(
         Weight for positive samples to handle class imbalance
         shape = (num_go_terms,)
         If None, all classes are weighted equally
+        Ignored if use_negative_sampling=True
+    use_negative_sampling : bool
+        Whether to use negative sampling instead of full BCE
+        If True, pos_weight is ignored
+    num_negative_samples : int
+        Number of negative samples per protein when use_negative_sampling=True
 
     Returns
     -------
@@ -61,12 +69,18 @@ def train_model(
     model = model.to(device)
 
     # 損失関数とオプティマイザ
-    # pos_weightがある場合はデバイスに移動してから使用
-    if pos_weight is not None:
+    # Negative sampling takes precedence over pos_weight
+    if use_negative_sampling:
+        from loss import SampledBCEWithLogitsLoss
+        criterion = SampledBCEWithLogitsLoss(num_negative_samples=num_negative_samples)
+        print(f"Using SampledBCEWithLogitsLoss with {num_negative_samples} negative samples")
+    elif pos_weight is not None:
         pos_weight = pos_weight.to(device)
         criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+        print("Using BCEWithLogitsLoss with pos_weight")
     else:
         criterion = nn.BCEWithLogitsLoss()
+        print("Using standard BCEWithLogitsLoss")
 
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
@@ -83,14 +97,17 @@ def train_model(
     patience_counter = 0
     best_model_state = None
 
-    print(f"Starting training...")
+    print(f"\nStarting training...")
     print(f"  Device: {device}")
     print(f"  Number of epochs: {num_epochs}")
     print(f"  Learning rate: {learning_rate}")
     print(f"  Batch size: {train_loader.batch_size}")
     print(f"  Number of batches per epoch: {len(train_loader)}")
     print(f"  Total training samples: {len(train_loader.dataset)}")
-    print(f"  Pos_weight enabled: {'Yes' if pos_weight is not None else 'No'}")
+    if use_negative_sampling:
+        print(f"  Negative sampling: Yes ({num_negative_samples} samples)")
+    else:
+        print(f"  Pos_weight enabled: {'Yes' if pos_weight is not None else 'No'}")
     if val_loader is not None:
         print(f"  Validation enabled: Yes")
         print(f"  Validation samples: {len(val_loader.dataset)}")
