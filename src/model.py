@@ -9,7 +9,7 @@ This module provides:
 - Helper functions for creating training data
 """
 
-from typing import Dict, List, Tuple
+from typing import Dict, List, Tuple, Optional
 import math
 import numpy as np
 import pandas as pd
@@ -309,3 +309,70 @@ class JointModel(nn.Module):
         logits = self.forward(h_batch)
         probs = torch.sigmoid(logits)
         return probs
+
+
+def compute_pos_weight(
+    y_train: np.ndarray,
+    clip_max: Optional[float] = None
+) -> torch.Tensor:
+    """
+    Compute pos_weight for BCEWithLogitsLoss to handle class imbalance.
+
+    pos_weight[i] = (num_negative_samples[i]) / (num_positive_samples[i])
+                  = number of negatives / number of positives for each GO term
+
+    This gives higher weight to positive samples of rare GO terms.
+
+    Parameters
+    ----------
+    y_train : np.ndarray
+        Training labels, shape = (num_proteins, num_go_terms)
+        Binary matrix where y_train[i, j] = 1 if protein i has GO term j
+    clip_max : float, optional
+        Maximum value to clip pos_weight (prevents extreme values)
+        Default: None (no clipping)
+
+    Returns
+    -------
+    torch.Tensor
+        pos_weight tensor, shape = (num_go_terms,)
+        Weight for positive samples of each GO term
+
+    Notes
+    -----
+    - For GO terms with no positive samples, pos_weight is set to 1.0
+    - Clipping prevents extremely large weights for very rare GO terms
+    - BCEWithLogitsLoss uses this to weight the positive class loss:
+      loss = -pos_weight * y * log(sigmoid(x)) - (1 - y) * log(1 - sigmoid(x))
+    """
+    # Count positive and negative samples for each GO term
+    pos_counts = y_train.sum(axis=0)  # (num_go,)
+    num_proteins = y_train.shape[0]
+    neg_counts = num_proteins - pos_counts
+
+    # Compute pos_weight = neg_count / pos_count
+    # Add small epsilon to avoid division by zero
+    pos_weight = neg_counts / (pos_counts + 1e-8)
+
+    # Handle edge case: if a GO term has no positive samples, set weight to 1.0
+    pos_weight[pos_counts == 0] = 1.0
+
+    # Clip to prevent extreme values
+    if clip_max is not None:
+        pos_weight = np.minimum(pos_weight, clip_max)
+
+    # Convert to torch tensor
+    pos_weight_tensor = torch.tensor(pos_weight, dtype=torch.float32)
+
+    # Print statistics
+    print(f"\nPos_weight statistics:")
+    print(f"  Min:    {pos_weight.min():.2f}")
+    print(f"  Max:    {pos_weight.max():.2f}")
+    print(f"  Mean:   {pos_weight.mean():.2f}")
+    print(f"  Median: {np.median(pos_weight):.2f}")
+    print(f"  Number of GO terms: {len(pos_weight)}")
+    print(f"  GO terms with no positives: {(pos_counts == 0).sum()}")
+    if clip_max is not None:
+        print(f"  Clipped to max: {clip_max}")
+
+    return pos_weight_tensor

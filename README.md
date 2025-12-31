@@ -363,6 +363,10 @@ LEARNING_RATE = 1e-3
 # Training control
 ENABLE_TRAINING = True  # Set to False to skip training and load existing model
 
+# Class imbalance handling
+USE_POS_WEIGHT = True  # Use pos_weight to handle class imbalance
+POS_WEIGHT_CLIP_MAX = 100.0  # Maximum pos_weight value
+
 # Evaluation
 ENABLE_VALIDATION = True
 VAL_SPLIT_RATIO = 0.2
@@ -383,6 +387,28 @@ ENABLE_TRAINING = False
 ```
 
 **Note:** If `ENABLE_TRAINING = False` and the model file doesn't exist, an error will be raised. Train the model at least once with `ENABLE_TRAINING = True` before disabling training.
+
+**Class Imbalance Handling:**
+
+The dataset has severe class imbalance - most proteins have only a few GO term annotations out of thousands of possible terms. This causes the model to predict mostly zeros.
+
+To address this, we use `pos_weight` in the loss function:
+
+```python
+# Enable pos_weight to give higher weight to positive samples
+USE_POS_WEIGHT = True
+
+# Clip maximum weight to prevent extreme values
+POS_WEIGHT_CLIP_MAX = 100.0
+```
+
+**How pos_weight works:**
+- For each GO term, calculates `pos_weight = (# negative samples) / (# positive samples)`
+- Rare GO terms get higher weights, forcing the model to pay attention to them
+- Prevents the model from just predicting all zeros
+- Clipping prevents extreme weights for very rare terms
+
+Set `USE_POS_WEIGHT = False` to disable this feature and use standard BCE loss.
 
 **Hierarchical Postprocessing Parameters:**
 

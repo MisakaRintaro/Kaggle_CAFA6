@@ -127,6 +127,10 @@ LEARNING_RATE = 1e-3
 EARLY_STOPPING_PATIENCE = 3  # Number of epochs with no improvement to wait before stopping
 EARLY_STOPPING_MIN_DELTA = 0.01  # Minimum relative improvement rate (1% = 0.01)
 
+# Class imbalance handling
+USE_POS_WEIGHT = True  # Whether to use pos_weight for handling class imbalance
+POS_WEIGHT_CLIP_MAX = 100.0  # Maximum value for pos_weight to prevent extreme values
+
 # Prediction parameters
 TOP_K_PREDICTIONS = 100  # Number of GO terms to predict per protein
 ADD_TEXT_DESCRIPTIONS = False  # Whether to add text descriptions in submission

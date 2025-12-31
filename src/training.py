@@ -23,7 +23,8 @@ def train_model(
     learning_rate: float = 1e-3,
     val_loader: DataLoader = None,
     patience: int = 3,
-    min_delta: float = 0.01
+    min_delta: float = 0.01,
+    pos_weight: torch.Tensor = None
 ) -> Dict[str, List[float]]:
     """
     JointModelを訓練する関数
@@ -46,6 +47,10 @@ def train_model(
         Early stoppingのpatience（改善が見られないエポック数の許容値）
     min_delta : float
         改善と見なすための最小相対改善率（例: 0.01 = 1%改善）
+    pos_weight : torch.Tensor, optional
+        Weight for positive samples to handle class imbalance
+        shape = (num_go_terms,)
+        If None, all classes are weighted equally
 
     Returns
     -------
@@ -56,7 +61,13 @@ def train_model(
     model = model.to(device)
 
     # 損失関数とオプティマイザ
-    criterion = nn.BCEWithLogitsLoss()
+    # pos_weightがある場合はデバイスに移動してから使用
+    if pos_weight is not None:
+        pos_weight = pos_weight.to(device)
+        criterion = nn.BCEWithLogitsLoss(pos_weight=pos_weight)
+    else:
+        criterion = nn.BCEWithLogitsLoss()
+
     optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
 
     # 訓練履歴を記録
@@ -79,6 +90,7 @@ def train_model(
     print(f"  Batch size: {train_loader.batch_size}")
     print(f"  Number of batches per epoch: {len(train_loader)}")
     print(f"  Total training samples: {len(train_loader.dataset)}")
+    print(f"  Pos_weight enabled: {'Yes' if pos_weight is not None else 'No'}")
     if val_loader is not None:
         print(f"  Validation enabled: Yes")
         print(f"  Validation samples: {len(val_loader.dataset)}")

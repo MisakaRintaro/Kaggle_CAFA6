@@ -48,6 +48,8 @@ from config import (
     ENABLE_TRAINING,
     EARLY_STOPPING_PATIENCE,
     EARLY_STOPPING_MIN_DELTA,
+    USE_POS_WEIGHT,
+    POS_WEIGHT_CLIP_MAX,
     get_device,
     get_config_summary
 )
@@ -74,7 +76,8 @@ from go_embedding import (
 from model import (
     create_protein_go_label_matrix,
     ProteinGODataset,
-    JointModel
+    JointModel,
+    compute_pos_weight
 )
 
 from training import (
@@ -296,6 +299,15 @@ def main():
             go_raw_emb=go_emb_matrix
         )
 
+        # Compute pos_weight for class imbalance handling
+        pos_weight = None
+        if USE_POS_WEIGHT:
+            print("\nComputing pos_weight for class imbalance handling...")
+            pos_weight = compute_pos_weight(
+                y_train,
+                clip_max=POS_WEIGHT_CLIP_MAX
+            )
+
         # Train model
         history = train_model(
             model,
@@ -305,7 +317,8 @@ def main():
             learning_rate=LEARNING_RATE,
             val_loader=val_loader,
             patience=EARLY_STOPPING_PATIENCE,
-            min_delta=EARLY_STOPPING_MIN_DELTA
+            min_delta=EARLY_STOPPING_MIN_DELTA,
+            pos_weight=pos_weight
         )
 
         # Save model
